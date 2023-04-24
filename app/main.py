@@ -1,80 +1,84 @@
-from fastapi import FastAPI
-from typing import List, Optional
-from pydantic import BaseModel
-from datetime import datetime
+from typing import List
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from .database.database import SessionLocal, engine
+from .database.models import Base, Player, Event
+from .database.schemas import PlayerCreate, Player, EventCreate, Event
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# Define a data model for Player
-class Player(BaseModel):
-    name: str
-    id: int
 
-# Define a data model for an Event
-class Event(BaseModel):
-    event_type: str
-    timestamp: str
-    player_id: int
+def get_db():
+    try:
+        db = SessionLocal()
+        yield db
+    finally:
+        db.close()
 
-# Define a list to store players and events
-players = []
-events = []
 
-# Create a new player and add them to the list
-@app.post("/players")
-def create_player(player: Player):
-    player.id = len(players) + 1
-    players.append(player)
-    return player
+@app.post("/players", response_model=Player)
+def create_player(player: PlayerCreate, db: Session = Depends(get_db)):
+    db_player = Player(name=player.name)
+    db.add(db_player)
+    db.commit()
+    db.refresh(db_player)
+    return db_player
 
-# Get a list of all players
-@app.get("/players")
-def get_players():
+
+@app.get("/players", response_model=List[Player])
+def get_players(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    players = db.query(Player).offset(skip).limit(limit).all()
     return players
 
-# Get a specific player by ID
-@app.get("/players/{player_id}")
-def get_player(player_id: int):
-    for player in players:
-        if player.id == player_id:
-            return player
-    return {"error": "Player not found"}
 
-# Create a new event and add it to the list
-@app.post("/events")
-def create_event(event: Event):
-    event.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    events.append(event)
-    return event
+@app.get("/players/{player_id}", response_model=Player)
+def get_player(player_id: int, db: Session = Depends(get_db)):
+    player = db.query(Player).filter(Player.id == player_id).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return player
 
-# Get a list of all events
-@app.get("/events")
-def get_events():
+
+@app.post("/events", response_model=Event)
+def create_event(event: EventCreate, db: Session = Depends(get_db)):
+    db_player = db.query(Player).filter(Player.id == event.player_id).first()
+    if not db_player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    db_event = Event(event_type=event.event_type, player_id=event.player_id)
+    db.add(db_event)
+    db.commit()
+    db.refresh(db_event)
+    return db_event
+
+
+@app.get("/events", response_model=List[Event])
+def get_events(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    events = db.query(Event).offset(skip).limit(limit).all()
     return events
 
-# Get all events for a specific player
-@app.get("/players/{player_id}/events")
-def get_player_events(player_id: int):
-    player_events = []
-    for event in events:
-        if event.player_id == player_id:
-            player_events.append(event)
-    return player_events
 
-# Get all events of a specific type for a specific player
-@app.get("/players/{player_id}/events/{event_type}")
-def get_player_events_by_type(player_id: int, event_type: str):
-    player_events = []
-    for event in events:
-        if event.player_id == player_id and event.event_type == event_type:
-            player_events.append(event)
-    return player_events
+@app.get("/players/{player_id}/events", response_model=List[Event])
+def get_player_events(player_id: int, db: Session = Depends(get_db)):
+    player = db.query(Player).filter(Player.id == player_id).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    events = db.query(Event).filter(Event.player_id == player_id).all()
+    return events
 
-# Get all events of a specific type
-@app.get("/events/{event_type}")
-def get_events_by_type(event_type: str):
-    type_events = []
-    for event in events:
-        if event.event_type == event_type:
-            type_events.append(event)
-    return type_events
+
+@app.get("/players/{player_id}/events/{event_type}", response_model=List[Event])
+def get_player_events_by_type(player_id: int, event_type: str, db: Session = Depends(get_db)):
+    player = db.query(Player).filter(Player.id == player_id).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    events = db.query(Event).filter(Event.player_id == player_id, Event.event_type == event_type).all()
+    return events
+
+
+@app.get("/events/{event_type}", response_model=List[Event])
+def get_events_by_type(event_type: str, db: Session = Depends(get_db)):
+    events = db.query(Event).filter(Event.event_type == event_type).all()
+    return events
